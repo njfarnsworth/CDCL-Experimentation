@@ -4,12 +4,14 @@ include("stats.jl")
 include("vsids.jl")
 include("phasesaving.jl")
 include("restarts.jl")
+include("clause_del.jl")
 
 using .DIMACS
 using .CDCLStats
 using .VSIDS
 using .PhaseSaving
 using .Restarts
+using .ClauseDeletion
 
 mutable struct Solver 
     # problem-specific
@@ -35,6 +37,7 @@ mutable struct Solver
     vsids::VSIDSState
     phase::PhaseState
     rst::RestartState
+    cdb::ClauseDB
 end
 
 @inline function want_value(lit::Int)::Int8
@@ -92,10 +95,11 @@ function Solver(cnf::CNF)
 
     vs = init_vsids(n, 0.95, 1e100)
     ph = init_phase(n)
-    rst = init_restarts(1, 1.5) # MESS WITH THESE PARAMETERS 
+    rst = init_restarts(100, 1.5)
+    cdb = init_clausedb(length(cls), 2000, 0.5, 2, false)
 
     return Solver(n,cls,model,level,antecedent, trail, trail_lim, 
-    qhead, watchlist, watch1, watch2, Stats(), vs, ph, rst)
+    qhead, watchlist, watch1, watch2, Stats(), vs, ph, rst, cdb)
 end
 
 @inline decision_level(S::Solver) = length(S.trail_lim) # returns the current decision level of the solver
@@ -172,8 +176,6 @@ function propagate!(S::Solver)::Int
     while S.qhead <= length(S.trail) # while there are still literals to propagate
         lit = S.trail[S.qhead]
         S.qhead += 1
-
-        # --- instrumentation ---
         S.st.propagations += 1
 
         false_lit = -1*lit
@@ -183,6 +185,13 @@ function propagate!(S::Solver)::Int
         i = 1
         while i <= length(w) # iterate through those clauses
             cid = w[i]
+
+            if S.cdb.deleted[cid] # don't use deleted clauses 
+                w[i] = w[end]
+                pop!(w)
+                continue
+            end
+
             c = S.clauses[cid] # get the clause 
 
             w1pos = S.watch1[cid] # get the watched literals from that clause 
@@ -392,14 +401,13 @@ function analyze_conflict_1uip(S::Solver, conflict_cid::Int)
         return nothing
     end
 
-    # --- seed with conflict clause ---
     for lit in S.clauses[conflict_cid]
         add_lit!(lit)
     end
 
     idx = length(S.trail)
 
-    # --- resolve until only one current-level literal remains ---
+    # resolve until only one current-level literal remains 
     while num_cur[] > 1
         # pick most recent current-level var that is in the clause
         pivot_lit = 0
@@ -415,6 +423,8 @@ function analyze_conflict_1uip(S::Solver, conflict_cid::Int)
         v = abs(pivot_lit)
         reason_cid = S.antecedent[v]
         @assert reason_cid != 0  # pivot should not be a decision
+
+        bump_clause_activity!(S.cdb, reason_cid) # bump activity of clause for deletion purposes
 
         # remove pivot var from the working clause
         seen[v] = false
@@ -506,11 +516,13 @@ function solve_with_learning!(S::Solver)::Symbol
                 return :unsat
             end
             
+            lbd = compute_lbd(S.level, learned, decision_level(S))
+
             bump_clause!(S.vsids, learned)
 
             move_to_front!(learned, asserting)
             learned_cid = add_clause!(S, learned)
-
+            on_learned_clause!(S.cdb, learned_cid, lbd)
             S.st.learned_clauses += 1
 
             backtrack!(S, backlvl)
@@ -522,11 +534,10 @@ function solve_with_learning!(S::Solver)::Symbol
             # continue this loop until no more conflicts
 
             on_conflict!(S.rst) # record that a conflict happened to RestartState
-
-
-            println("Conflicts:", S.rst.conflicts_since)
-            println("Limit: ", S.rst.limit)
-            println("Level:", decision_level(S))
+            if should_reduce(S.cdb, S.st.conflicts)
+                deleted_now = reduce_db!(S.cdb, S.clauses, S.model, S.antecedent)
+                S.st.deleted_clauses += deleted_now
+            end
 
             if should_restart(S.rst) && decision_level(S) > 0 # if we should restart and we're not at the root 
                 backtrack!(S,0) # backtrack to the root

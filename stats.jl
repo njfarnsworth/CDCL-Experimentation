@@ -12,9 +12,10 @@ mutable struct Stats
     solve_time_ns::UInt64 
     start_time_ns::UInt64
     restarts::Int
+    deleted_clauses::Int
 end
 
-Stats() = Stats(0,0,0,0,0,0,0,0,0,0)
+Stats() = Stats(0,0,0,0,0,0,0,0,0,0,0)
 
 function reset!(st::Stats)
     st.decisions = 0
@@ -27,6 +28,8 @@ function reset!(st::Stats)
     st.solve_time_ns = 0
     st.start_time_ns = 0
     st.restarts = 0
+    st.deleted_clauses = 0
+
 end
 
 function start_timer!(st::Stats)
@@ -47,6 +50,7 @@ function print_stats(st::Stats)
     println("backtracks:      ", st.backtracks)
     println("learned clauses: ", st.learned_clauses)
     println("restarts: ", st.restarts)
+    println("deleted clauses: ", st.deleted_clauses)
     println("solve time (ms): ", Float64(st.solve_time_ns)/1e6)
    
 end

@@ -45,10 +45,19 @@ function run_file(filename::String)
 
     print_stats(S.st)
     println("\nResult: ", result)
+    if result == :sat
+        num_pos = count(==(Int8(1)), S.model)
+        num_neg = count(==(Int8(-1)), S.model)
+        num_unassigned = count(==(Int8(0)), S.model)
+
+        println("\nModel Statistics:")
+        println("  # true  (1s): ", num_pos)
+        println("  # false (-1s): ", num_neg)
+        println("  # unassigned (0s): ", num_unassigned)
+    end
 end
 
-# Try a few files
-run_file("cnfs/hj/hj33_2.cnf")
+run_file("cnfs/hj/hj33_4.cnf")
 # run_file("cnfs/tiny_sat.cnf")
 # run_file("cnfs/tiny_unsat.cnf")
 
