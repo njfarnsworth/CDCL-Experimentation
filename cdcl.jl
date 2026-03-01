@@ -5,6 +5,7 @@ include("vsids.jl")
 include("phasesaving.jl")
 include("restarts.jl")
 include("clause_del.jl")
+include("config.jl")
 
 using .DIMACS
 using .CDCLStats
@@ -12,6 +13,7 @@ using .VSIDS
 using .PhaseSaving
 using .Restarts
 using .ClauseDeletion
+using .SolverConfig
 
 mutable struct Solver 
     # problem-specific
@@ -38,6 +40,7 @@ mutable struct Solver
     phase::PhaseState
     rst::RestartState
     cdb::ClauseDB
+    cfg::Config
 end
 
 @inline function want_value(lit::Int)::Int8
@@ -58,7 +61,7 @@ end
 end
 
 
-function Solver(cnf::CNF)
+function Solver(cnf::CNF, cfg::Config)
     # initializes everything from the CNF for the solver
     n = cnf.nvars
     cls = Vector{Vector{Int}}(undef, length(cnf.clauses))
@@ -93,13 +96,21 @@ function Solver(cnf::CNF)
         end
     end
 
-    vs = init_vsids(n, 0.95, 1e100)
+    vs = init_vsids(n, cfg.vsids_decay, cfg.vsids_max_thresh)
     ph = init_phase(n)
-    rst = init_restarts(100, 1.5)
-    cdb = init_clausedb(length(cls), 2000, 0.5, 2, false)
+    rst = cfg.restarts ?
+        init_restarts(cfg.restart_base, cfg.restart_mult) :
+        init_restarts(0, 1.0) # disable 
+    cdb = init_clausedb(
+        length(cls), 
+        cfg.reduce_every, 
+        cfg.delete_frac, 
+        cfg.glue_lbd,
+        cfg.keep_ternary)
 
-    return Solver(n,cls,model,level,antecedent, trail, trail_lim, 
-    qhead, watchlist, watch1, watch2, Stats(), vs, ph, rst, cdb)
+    return Solver(n,cls,model,level,antecedent, 
+    trail, trail_lim, qhead, watchlist, watch1, 
+    watch2, Stats(), vs, ph, rst, cdb, cfg)
 end
 
 @inline decision_level(S::Solver) = length(S.trail_lim) # returns the current decision level of the solver
@@ -302,7 +313,7 @@ end
 
 function solve_no_learning!(S::Solver)::Symbol
     reset!(S.st)
-    start_timer!(S.st)
+    st = start_timer!(S.st)
 
     root_conflict = initial_propagate!(S)
     if root_conflict == -1
@@ -424,7 +435,7 @@ function analyze_conflict_1uip(S::Solver, conflict_cid::Int)
         reason_cid = S.antecedent[v]
         @assert reason_cid != 0  # pivot should not be a decision
 
-        bump_clause_activity!(S.cdb, reason_cid) # bump activity of clause for deletion purposes
+        bump_clause_activity!(S.cdb, reason_cid, S.cfg.clause_bump) # bump activity of clause for deletion purposes
 
         # remove pivot var from the working clause
         seen[v] = false
@@ -545,6 +556,17 @@ function solve_with_learning!(S::Solver)::Symbol
                 S.st.restarts += 1
             end
 
+
+            if (S.cfg.max_conflicts > 0 && S.st.conflicts >= S.cfg.max_conflicts) || (S.cfg.max_seconds > 0 && (time() - st) >= S.cfg.max_seconds)
+                stop_timer!(S.st)
+                return :unknown # maxed out on conflicts or time 
+            end
+
+
+            if S.cfg.verbose > 0
+                maybe_progress(S)
+            end
+
         end
     end
 end
@@ -553,4 +575,18 @@ function move_to_front!(c::Vector{Int}, lit::Int)
     j = findfirst(==(lit), c)
     j === nothing && return
     c[1], c[j] = c[j], c[1]
+end
+
+@inline function maybe_progress(S::Solver)
+    pe = S.cfg.progress_every
+    if pe > 0 && (S.st.conflicts % pe == 0)
+        ln("conflicts=", S.st.conflicts,
+                " decisions=", S.st.decisions,
+                " props=", S.st.propagations,
+                " level=", decision_level(S),
+                " learned=", S.st.learned_clauses,
+                " deleted=", S.st.deleted_clauses,
+                " restarts=", S.st.restarts)
+    end
+    return nothing
 end

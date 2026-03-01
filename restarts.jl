@@ -18,7 +18,7 @@ end
 end
 
 @inline function should_restart(R::RestartState)::Bool
-    return R.conflicts_since >= R.limit
+    return R.conflicts_since >= R.limit && R.limit != 0
 end
 
 function do_restart!(R::RestartState)
