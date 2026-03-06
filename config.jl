@@ -4,6 +4,10 @@ export Config, default_config, parse_args
 
 mutable struct Config
 
+    # cube parameters (for [k]^n incidence analysis)
+    k::Int
+    n::Int
+
     # limits / prints
     max_conflicts::Int
     max_seconds::Float64
@@ -21,7 +25,7 @@ mutable struct Config
     restart_mult::Float64
 
     # clause deletion
-    reduce_every::Int # 0 for no deletion 
+    reduce_every::Int
     delete_frac::Float64
     glue_lbd::Int
     keep_ternary::Bool
@@ -29,34 +33,46 @@ mutable struct Config
 
 end
 
+
 function default_config()::Config
     return Config(
+
+        # cube params
+        3, # k
+        3, # n
+
+        # limits
         0, # max conflicts
         0.0, # max time
         0, # verbose
         0, # progress every
 
-        :vsids, # branch heuristic
-        0.95, # decay
-        1e100, # max threshold
+        # VSIDS
+        :vsids,
+        0.95,
+        1e100,
 
-        true, # restarts
-        100, # restart base
-        1.5, # restart multi 
+        # restarts
+        true,
+        100,
+        1.5,
 
-        2000, # reduce every
-        0.5, # frac to delete 
-        2, # glue
-        false, # keep ternary
-        1.0 # clause bump 
+        # clause deletion
+        2000,
+        0.5,
+        2,
+        false,
+        1.0
     )
-
 end
 
-#  CLI flag parsing 
-export parse_args
+
+# ------------------------------------------------------------
+# CLI parsing
+# ------------------------------------------------------------
 
 function parse_args(args::Vector{String})
+
     cfg = default_config()
     cnf_file = ""
 
@@ -64,20 +80,21 @@ function parse_args(args::Vector{String})
     while i <= length(args)
         a = args[i]
 
-        # allow positional CNF as well
+        # positional CNF allowed
         if !startswith(a, "--")
             cnf_file = a
             i += 1
             continue
         end
 
+        # support --flag=value syntax
         if occursin('=', a)
             parts = split(a, '='; limit=2)
             a = parts[1]
             insert!(args, i+1, parts[2])
         end
 
-        # helper: read next token
+        # helper to read next token
         function next_value()
             if i == length(args)
                 error("Missing value after $(a)")
@@ -85,11 +102,32 @@ function parse_args(args::Vector{String})
             return args[i+1]
         end
 
+
+        # ----------------------------------------------------
+        # instance / cube parameters
+        # ----------------------------------------------------
+
+        if a == "--k"
+            cfg.k = parse(Int, next_value()); i += 2; continue
+        elseif a == "--n"
+            cfg.n = parse(Int, next_value()); i += 2; continue
+        end
+
+
+        # ----------------------------------------------------
+        # CNF input
+        # ----------------------------------------------------
+
         if a == "--cnf"
             cnf_file = next_value()
             i += 2
             continue
         end
+
+
+        # ----------------------------------------------------
+        # limits
+        # ----------------------------------------------------
 
         if a == "--max-conflicts"
             cfg.max_conflicts = parse(Int, next_value()); i += 2; continue
@@ -101,6 +139,11 @@ function parse_args(args::Vector{String})
             cfg.progress_every = parse(Int, next_value()); i += 2; continue
         end
 
+
+        # ----------------------------------------------------
+        # branching / VSIDS
+        # ----------------------------------------------------
+
         if a == "--branch"
             cfg.branch_policy = Symbol(next_value()); i += 2; continue
         elseif a == "--vsids-decay"
@@ -109,57 +152,95 @@ function parse_args(args::Vector{String})
             cfg.vsids_max_thresh = parse(Float64, next_value()); i += 2; continue
         end
 
+
+        # ----------------------------------------------------
+        # restarts
+        # ----------------------------------------------------
+
         if a == "--restarts"
-            # accepts: 1/0 true/false
             v = lowercase(next_value())
             cfg.restarts = (v in ("1","true","t","yes","y"))
             i += 2; continue
+
         elseif a == "--restart-base" || a == "--restarts-base"
-            # support both spellings so you don't get stuck on naming
-            cfg.restarts_base = parse(Int, next_value()); i += 2; continue
+            cfg.restart_base = parse(Int, next_value()); i += 2; continue
+
         elseif a == "--restart-mult" || a == "--restarts-mult"
-            cfg.restarts_mult = parse(Float64, next_value()); i += 2; continue
+            cfg.restart_mult = parse(Float64, next_value()); i += 2; continue
         end
+
+
+        # ----------------------------------------------------
+        # clause deletion
+        # ----------------------------------------------------
 
         if a == "--reduce-every"
             cfg.reduce_every = parse(Int, next_value()); i += 2; continue
+
         elseif a == "--delete-frac"
             cfg.delete_frac = parse(Float64, next_value()); i += 2; continue
+
         elseif a == "--glue-lbd"
             cfg.glue_lbd = parse(Int, next_value()); i += 2; continue
+
         elseif a == "--keep-ternary"
             v = lowercase(next_value())
             cfg.keep_ternary = (v in ("1","true","t","yes","y"))
             i += 2; continue
+
         elseif a == "--clause-bump"
             cfg.clause_bump = parse(Float64, next_value()); i += 2; continue
         end
 
+
+        # ----------------------------------------------------
+        # help
+        # ----------------------------------------------------
+
         if a == "--help" || a == "-h"
             println("""
 
+Solver configuration flags:
+
+Instance parameters:
+  --k <int>
+  --n <int>
+
+Branching:
   --branch <vsids|first>
   --vsids-decay <float>
   --vsids-max-thresh <float>
 
+Restarts:
   --restarts <true|false>
   --restart-base <int>
   --restart-mult <float>
 
-  --reduce-every <int>         (0 = no deletion)
+Clause deletion:
+  --reduce-every <int>      (0 = disable deletion)
   --delete-frac <float>
   --glue-lbd <int>
   --keep-ternary <true|false>
   --clause-bump <float>
 
+Limits:
+  --max-conflicts <int>
+  --max-seconds <float>
+
+Output:
+  --verbose <int>
+  --progress-every <int>
+
 You can also pass the CNF as a positional argument:
-  julia test_cdcl.jl cnfs/hj/hj33_4.cnf --vsids-decay 0.97
+  julia run_cdcl.jl cnfs/hj/hj33_4.cnf --k 3 --n 5
 """)
             exit()
         end
 
+
         error("Unknown flag: $(a)")
     end
+
 
     if cnf_file == ""
         error("No CNF file provided. Use --cnf <file> or pass it as a positional argument.")

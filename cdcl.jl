@@ -169,6 +169,7 @@ function backtrack!(S::Solver, lvl::Int)
         S.model[v] = Int8(0) # reset all of the stats for that variable 
         S.level[v] = 0
         S.antecedent[v] = 0
+        heap_push!(S.vsids, S.vsids.activity[v], v)
     end
 
     resize!(S.trail, target_len)

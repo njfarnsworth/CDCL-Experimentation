@@ -1,6 +1,6 @@
 module VSIDS
 
-export VSIDSState, init_vsids, maybe_rescale!, bump_clause!, pick_branch_var
+export VSIDSState, init_vsids, maybe_rescale!, bump_clause!, pick_branch_var, heap_push!
 
 mutable struct VSIDSState
     activity::Vector{Float64}
@@ -73,22 +73,22 @@ function bump_clause!(V::VSIDSState, clause::Vector{Int})
 end
 
 function pick_branch_var(V::VSIDSState, model::Vector{Int8})::Int
-    # picks the unassigned var with the max activity
     while !isempty(V.heap_a)
         a, v = heap_pop!(V)
 
-        if model[v] != Int8(0)
-            continue 
-        end
-
-        if a < V.activity[v] # becaus we can have stale entries 
+        # skip if assigned
+        if model[v] != 0
             continue
         end
 
-        return v 
-    end
+        # skip stale heap entry (because we allow duplicates)
+        if a != V.activity[v]
+            continue
+        end
 
-    return 0 
+        return v
+    end
+    return 0
 end
 
 
