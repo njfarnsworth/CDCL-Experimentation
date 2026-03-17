@@ -1,18 +1,4 @@
 # run_cdcl.jl
-#
-# Single entrypoint script:
-#   - parses CNF+solver config via SolverConfig.parse_args
-#   - parses --k= and --n= for incidence (defaults 3,3 if not provided)
-#   - runs CDCL
-#   - builds:
-#       activity_dict  :: Dict{Int,Float64}  (triple -> sum of VSIDS activities)
-#       incidence_dict :: Dict{Int,Float64}  (point/triple -> #lines through point)
-#   - compares them (correlations)
-#
-# Usage example:
-#   julia run_cdcl.jl path/to/file.cnf --k=3 --n=5 --vsids_decay=0.95 ...
-#
-# NOTE: this assumes your encoding uses triples (3 vars per point) in consecutive order.
 
 include("cdcl.jl")
 include("model_analysis.jl")
@@ -24,197 +10,166 @@ using .SolverConfig
 using Statistics
 
 # -----------------------------
-# Incidence (Theorem 6.2) code
+# Incidence/Activity analysis
 # -----------------------------
 
-function parse_kn(args::Vector{String})
-    k = 3
-    n = 3
-    for a in args
-        if startswith(a, "--k=")
-            k = parse(Int, split(a, "=")[2])
-        elseif startswith(a, "--n=")
-            n = parse(Int, split(a, "=")[2])
+function point_incidence_sums(S, colors::Int)::Dict{Int,Float64}
+    w = S.vsids.incidence_weight
+
+    if colors == 2
+        d = Dict{Int,Float64}()
+        for p in 1:length(w)
+            d[p] = w[p]
         end
+        return d
+
+    elseif colors == 3
+        npoints = div(length(w), 3)
+        d = Dict{Int,Float64}()
+        for p in 1:npoints
+            i = 3 * (p - 1) + 1
+            d[p] = w[i]
+        end
+        return d
+    else
+        error("Unsupported colors = $colors.")
     end
-    return k, n
 end
 
-function lines_through_point(x, k::Int)::BigInt
-    counts = zeros(Int, k)
-    @inbounds for xi in x
-        counts[xi] += 1
-    end
-    total = big(0)
-    @inbounds for m in counts
-        total += (big(1) << m) - 1 # 2^m - 1
-    end
-    return total
-end
-
-function point_to_int(x, k::Int)::Int
-    idx = 0
-    @inbounds for xi in x
-        idx = idx * k + (xi - 1)
-    end
-    return idx + 1
-end
-
-"Dict(point_id => #lines through point) for [k]^n"
-function compute_incidence_dict(k::Int, n::Int)::Dict{Int,BigInt}
-    result = Dict{Int,BigInt}()
-    it = Iterators.product(ntuple(_ -> 1:k, n)...)
-    for p in it
-        result[point_to_int(p, k)] = lines_through_point(p, k)
-    end
-    return result
-end
-
-# -----------------------------
-# Activity per triple
-# -----------------------------
-
-"Dict(triple_id => sum activity of vars (3t-2,3t-1,3t))"
-function triple_activity_sums(S)::Dict{Int,Float64}
-    act = S.vsids.activity
-    ntriples = div(length(act), 3)
-    d = Dict{Int,Float64}()
-    for t in 1:ntriples
-        i = 3*(t-1) + 1
-        d[t] = act[i] + act[i+1] + act[i+2]
-    end
-    return d
-end
-
-# -----------------------------
-# Relationship analysis
-# -----------------------------
-
-function correlate_dicts(inc::Dict{Int,Float64}, act::Dict{Int,Float64})
+function correlation_stats(inc::Dict{Int,Float64}, act::Dict{Int,Float64})
     ks = sort(collect(intersect(keys(inc), keys(act))))
+
     if isempty(ks)
-        println("\nNo overlapping keys between incidence and activity dicts.")
-        return
+        return (pearson_all = nothing, pearson_nonzero = nothing)
     end
 
     x = [inc[k] for k in ks]
     y = [act[k] for k in ks]
 
-    println("\nIncidence vs Activity (over ", length(ks), " triples):")
-    println("  Pearson cor (all)          = ", cor(x, y))
+    pearson_all =
+        if length(x) < 2 || all(==(x[1]), x) || all(==(y[1]), y)
+            nothing
+        else
+            cor(x, y)
+        end
 
     nz = findall(!=(0.0), y)
-    if !isempty(nz)
-        println("  Pearson cor (activity>0)   = ", cor(x[nz], y[nz]))
-        println("  Nonzero activity fraction  = ", length(nz), " / ", length(y))
-    else
-        println("  All activity values are 0.0; correlation undefined.")
-    end
+
+    pearson_nonzero =
+        if length(nz) < 2
+            nothing
+        else
+            xnz = x[nz]
+            ynz = y[nz]
+            if all(==(xnz[1]), xnz) || all(==(ynz[1]), ynz)
+                nothing
+            else
+                cor(xnz, ynz)
+            end
+        end
+
+    return (pearson_all = pearson_all, pearson_nonzero = pearson_nonzero)
 end
 
 # -----------------------------
-# Runner
+# Single run
 # -----------------------------
 
-function run_file(filename::String; cfg::Config = default_config(), k::Int=3, n::Int=3)
+function single_run(filename::String; cfg::Config)
     cnf = DIMACS.load_cnf(filename)
-
-    println("Loaded CNF:")
-    println("  File:      ", filename)
-    println("  Variables: ", cnf.nvars)
-    println("  Clauses:   ", length(cnf.clauses))
-
     S = Solver(cnf, cfg)
 
-    println("\nConfig:")
-    println("  branch_policy   = ", cfg.branch_policy)
-    println("  vsids_decay     = ", cfg.vsids_decay)
-    println("  restarts        = ", cfg.restarts)
-    println("  restarts_base   = ", cfg.restart_base)
-    println("  restarts_mult   = ", cfg.restart_mult)
-    println("  reduce_every    = ", cfg.reduce_every)
-    println("  delete_frac     = ", cfg.delete_frac)
-    println("  glue_lbd        = ", cfg.glue_lbd)
-    println("  keep_ternary    = ", cfg.keep_ternary)
-    println("  clause_bump     = ", cfg.clause_bump)
-    println("  max_conflicts   = ", cfg.max_conflicts)
-    println("  max_seconds     = ", cfg.max_seconds)
-    println("  verbose         = ", cfg.verbose)
-    println("  progress_every  = ", cfg.progress_every)
-
     result = solve_with_learning!(S)
+    
+    activity_dict = ModelAnalysis.point_activity_sums(S, cfg.colors)
+    incidence_dict = point_incidence_sums(S, cfg.colors)
 
-    print_stats(S.st)
-    println("\nResult: ", result)
+    corr = correlation_stats(incidence_dict, activity_dict)
 
-    # VSIDS sanity
-    act = S.vsids.activity
+    return result, S, incidence_dict, activity_dict, corr
+end
+
+# -----------------------------
+# Experiment runner
+# -----------------------------
+
+function run_file(filename::String; cfg::Config = default_config())
+    nruns = cfg.runs
+    nruns >= 1 || error("--runs must be at least 1")
+
+    solve_times_ms = Float64[]
+
+    last_result = :unknown
+    last_S = nothing
+    last_incidence = Dict{Int,Float64}()
+    last_activity = Dict{Int,Float64}()
+    last_corr = nothing
+
+    println("Running solver $nruns time(s)...")
+
+    for r in 1:nruns
+        result, S, inc, act, corr = single_run(filename; cfg=cfg)
+
+        push!(solve_times_ms, Float64(S.st.solve_time_ns) / 1e6)
+
+        last_result = result
+        last_S = S
+        last_incidence = inc
+        last_activity = act
+        last_corr = corr
+    end
+
+    avg_time_ms = mean(solve_times_ms)
+    avg_time_sec = avg_time_ms / 1000
+
+    println("\n==============================")
+    println("FINAL RESULT: ", last_result)
+    println("==============================")
+
+    println("\nAverage solve time over $nruns runs:")
+    println("  avg time = ", avg_time_sec, " seconds")
+    println("           = ", avg_time_ms, " milliseconds")
+
+    println("\nSolver stats (from final run):")
+    print_stats(last_S.st)
+
     println("\nVSIDS summary:")
-    println("  learned_clauses = ", S.st.learned_clauses)
-    println("  conflicts       = ", S.st.conflicts)
-    println("  nonzero vars    = ", count(!=(0.0), act), " / ", length(act))
-    println("  max activity    = ", maximum(act))
+    act = last_S.vsids.activity
+    println("  nonzero vars = ", count(!=(0.0), act), " / ", length(act))
+    println("  max activity = ", maximum(act))
 
-    if result == :sat
-        num_pos = count(==(Int8(1)), S.model)
-        num_neg = count(==(Int8(-1)), S.model)
-        num_unassigned = count(==(Int8(0)), S.model)
+    println("\nIncidence vs Activity correlation:")
 
-        println("\nModel Statistics:")
-        println("  # true  (1s): ", num_pos)
-        println("  # false (-1s): ", num_neg)
-        println("  # unassigned (0s): ", num_unassigned)
+    if isnothing(last_corr.pearson_all)
+        println("  Pearson (all)        = undefined")
+    else
+        println("  Pearson (all)        = ", last_corr.pearson_all)
+    end
 
-        m0, m1, m2 = ModelAnalysis.count_true_by_mod3_model(S.model)
-        println("\nTrue vars by index mod 3:")
-        println("  v % 3 == 0: ", m0)
-        println("  v % 3 == 1: ", m1)
-        println("  v % 3 == 2: ", m2)
+    if isnothing(last_corr.pearson_nonzero)
+        println("  Pearson (activity>0) = undefined")
+    else
+        println("  Pearson (activity>0) = ", last_corr.pearson_nonzero)
+    end
 
+    if last_result == :sat
         println()
-        ModelAnalysis.print_point_color_breakdown(stdout, S.model; show_points=false)
+        ModelAnalysis.print_model_analysis(stdout, last_S.model, cfg.colors; show_points=false)
 
-        println()
-        ModelAnalysis.print_multicolor_breakdown(stdout, S.model)
+        ok, idx, clause = ModelAnalysis.verify_model_solver(last_S; return_witness=true)
 
-        # --- build dicts ---
-        activity_dict = triple_activity_sums(S)
-
-        # incidence dict from [k]^n
-        inc_big = compute_incidence_dict(k, n)
-        incidence_dict = Dict{Int,Float64}(t => Float64(v) for (t,v) in inc_big)
-
-        # sanity: do the counts match the encoding?
-        ntriples = length(activity_dict)
-        npoints  = length(incidence_dict)
-        if ntriples != npoints
-            println("\nWARNING: activity triples = $ntriples but incidence points = $npoints.")
-            println("  This usually means your provided --k, --n don't match the SAT instance encoding.")
-        end
-
-        # compare
-        correlate_dicts(incidence_dict, activity_dict)
-
-        # --- CNF verification ---
-        ok, idx, clause = ModelAnalysis.verify_model_solver(S; return_witness=true)
         println("\nModel verifies? ", ok)
         if !ok
             println("First failing clause #", idx, ": ", clause)
         end
-
-        return result, S, incidence_dict, activity_dict
     end
 
-    return result, S, Dict{Int,Float64}(), Dict{Int,Float64}()
+    return last_result, last_S, last_incidence, last_activity
 end
 
 # -----------------------------
 # Main
 # -----------------------------
 
-# Use your existing SolverConfig.parse_args to get (cnf_file, cfg).
-# Also parse --k and --n for incidence locally.
 cnf_file, cfg = parse_args(copy(ARGS))
-k, n = parse_kn(copy(ARGS))
-
-run_file(cnf_file; cfg=cfg, k=k, n=n)
+run_file(cnf_file; cfg=cfg)

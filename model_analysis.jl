@@ -3,8 +3,8 @@ module ModelAnalysis
 export count_true_by_mod3_model, count_true_by_mod3_trail, write_mod3_counts
 export verify_model_cnf, verify_model_solver
 export point_color_breakdown, print_point_color_breakdown
-export multicolor_points, print_multicolor_points
-export multicolor_breakdown, print_multicolor_breakdown
+export point_activity_sums
+export print_2color_model_analysis, print_3color_model_analysis, print_model_analysis
 
 # -----------------------------
 # Mod-3 counters
@@ -151,7 +151,72 @@ function verify_model_solver(S; require_total::Bool = true, return_witness::Bool
 end
 
 # -----------------------------
-# Point color analysis (3 vars per point)
+# Activity per point
+# -----------------------------
+
+"""
+Return Dict(point_id => point activity).
+
+Interpretation:
+- colors == 3:
+    assumes 3 consecutive vars per point, and sums their activities
+- colors == 2:
+    assumes 1 boolean var per point, so activity is just activity[p]
+"""
+function point_activity_sums(S, colors::Int)::Dict{Int,Float64}
+    act = S.vsids.activity
+
+    if colors == 3
+        nvars = length(act)
+        nvars % 3 == 0 || throw(ArgumentError("activity vector length $nvars is not divisible by 3 for colors=3"))
+
+        npoints = nvars ÷ 3
+        d = Dict{Int,Float64}()
+
+        @inbounds for p in 1:npoints
+            i = 3 * (p - 1) + 1
+            d[p] = act[i] + act[i + 1] + act[i + 2]
+        end
+        return d
+
+    elseif colors == 2
+        d = Dict{Int,Float64}()
+        @inbounds for p in 1:length(act)
+            d[p] = act[p]
+        end
+        return d
+
+    else
+        throw(ArgumentError("Unsupported colors=$colors; expected 2 or 3"))
+    end
+end
+
+# -----------------------------
+# 2-color model analysis
+# -----------------------------
+
+"""
+Print summary for 2-color encoding.
+
+Interpretation:
+- each variable corresponds to one point
+- model[v] == 1   => red
+- model[v] == -1  => blue
+- model[v] == 0   => unassigned
+"""
+function print_2color_model_analysis(io::IO, model::AbstractVector{<:Integer})
+    num_red = count(==(1), model)
+    num_blue = count(==(-1), model)
+    num_unassigned = count(==(0), model)
+
+    println(io, "2-Color Model Statistics:")
+    println(io, "  red points        = ", num_red)
+    println(io, "  blue points       = ", num_blue)
+    println(io, "  unassigned points = ", num_unassigned)
+end
+
+# -----------------------------
+# 3-color point analysis
 # Points are triples (R,B,G) in order:
 #   point p -> vars (3p-2, 3p-1, 3p)
 # -----------------------------
@@ -163,41 +228,30 @@ Categories:
 - r_only: (1,0,0)
 - b_only: (0,1,0)
 - g_only: (0,0,1)
-- rb:     (1,1,0)
-- rg:     (1,0,1)
-- bg:     (0,1,1)
-- rbg:    (1,1,1)
-- none:   (0,0,0)   (useful for debugging if "at least one color" is missing)
-- other:  anything involving unassigneds or unexpected values
+- none:   (0,0,0)
+- other:  anything else, including unassigneds or invalid multi-true points
 
 Returns a named tuple of vectors of point indices.
 """
 function point_color_breakdown(model::AbstractVector{<:Integer})
     nvars = length(model)
-    if nvars % 3 != 0
-        throw(ArgumentError("model length $nvars is not divisible by 3; expected 3 vars per point"))
-    end
+    nvars % 3 == 0 || throw(ArgumentError("model length $nvars is not divisible by 3; expected 3 vars per point"))
 
     npoints = nvars ÷ 3
 
     r_only = Int[]
     b_only = Int[]
     g_only = Int[]
-    rb = Int[]
-    rg = Int[]
-    bg = Int[]
-    rbg = Int[]
     none = Int[]
     other = Int[]
 
     @inbounds for p in 1:npoints
-        base = 3*(p-1) + 1
+        base = 3 * (p - 1) + 1
         vr = model[base]
-        vb = model[base+1]
-        vg = model[base+2]
+        vb = model[base + 1]
+        vg = model[base + 2]
 
-        # Only treat "== 1" as true; everything else is false for classification,
-        # BUT if you want to detect unassigned explicitly, send it to `other`.
+        # classify any unassigned point as other
         if vr == 0 || vb == 0 || vg == 0
             push!(other, p)
             continue
@@ -213,30 +267,25 @@ function point_color_breakdown(model::AbstractVector{<:Integer})
             push!(b_only, p)
         elseif !r && !b && g
             push!(g_only, p)
-        elseif r && b && !g
-            push!(rb, p)
-        elseif r && !b && g
-            push!(rg, p)
-        elseif !r && b && g
-            push!(bg, p)
-        elseif r && b && g
-            push!(rbg, p)
         elseif !r && !b && !g
             push!(none, p)
         else
+            # any multi-true combination is now treated as invalid/other
             push!(other, p)
         end
     end
 
     return (
-        r_only=r_only, b_only=b_only, g_only=g_only,
-        rb=rb, rg=rg, bg=bg, rbg=rbg,
-        none=none, other=other
+        r_only = r_only,
+        b_only = b_only,
+        g_only = g_only,
+        none   = none,
+        other  = other
     )
 end
 
 """
-Pretty-print point color breakdown.
+Pretty-print point color breakdown for 3-color encoding.
 
 If show_points=false, prints only counts.
 If show_points=true, prints counts and the point index lists.
@@ -248,77 +297,56 @@ function print_point_color_breakdown(io::IO, model::AbstractVector{<:Integer}; s
     println(io, "  R only (1,0,0): ", length(bd.r_only))
     println(io, "  B only (0,1,0): ", length(bd.b_only))
     println(io, "  G only (0,0,1): ", length(bd.g_only))
-    println(io, "  RB     (1,1,0): ", length(bd.rb))
-    println(io, "  RG     (1,0,1): ", length(bd.rg))
-    println(io, "  BG     (0,1,1): ", length(bd.bg))
-    println(io, "  RBG    (1,1,1): ", length(bd.rbg))
     println(io, "  NONE   (0,0,0): ", length(bd.none))
-    println(io, "  OTHER/UNASSIGNED: ", length(bd.other))
+    println(io, "  OTHER/INVALID/UNASSIGNED: ", length(bd.other))
 
     if show_points
         println(io, "\nPoints:")
         println(io, "  r_only: ", bd.r_only)
         println(io, "  b_only: ", bd.b_only)
         println(io, "  g_only: ", bd.g_only)
-        println(io, "  rb:     ", bd.rb)
-        println(io, "  rg:     ", bd.rg)
-        println(io, "  bg:     ", bd.bg)
-        println(io, "  rbg:    ", bd.rbg)
         println(io, "  none:   ", bd.none)
         println(io, "  other:  ", bd.other)
     end
 end
 
-# -----------------------------
-# Backwards-compatible helpers you already had
-# -----------------------------
+"""
+Print 3-color analysis, including mod-3 counts and point-color breakdown.
+"""
+function print_3color_model_analysis(io::IO, model::AbstractVector{<:Integer}; show_points::Bool=false)
+    num_pos = count(==(1), model)
+    num_neg = count(==(-1), model)
+    num_unassigned = count(==(0), model)
 
-"""
-Return all points (as point indices) that are "multicolor" (>=2 trues) under 3-color-per-point encoding.
-"""
-function multicolor_points(model::AbstractVector{<:Integer})
-    bd = point_color_breakdown(model)
-    # multicolor are rb/rg/bg/rbg
-    return vcat(bd.rb, bd.rg, bd.bg, bd.rbg)
+    println(io, "Model Statistics:")
+    println(io, "  # true  (1s): ", num_pos)
+    println(io, "  # false (-1s): ", num_neg)
+    println(io, "  # unassigned (0s): ", num_unassigned)
+
+    m0, m1, m2 = count_true_by_mod3_model(model)
+    println(io, "\nTrue vars by index mod 3:")
+    println(io, "  v % 3 == 0: ", m0)
+    println(io, "  v % 3 == 1: ", m1)
+    println(io, "  v % 3 == 2: ", m2)
+
+    println(io)
+    print_point_color_breakdown(io, model; show_points=show_points)
 end
 
 """
-Pretty-print multicolor points (if any).
-"""
-function print_multicolor_points(io::IO, model::AbstractVector{<:Integer})
-    bd = point_color_breakdown(model)
-    multis = vcat(bd.rb, bd.rg, bd.bg, bd.rbg)
+Dispatch model analysis based on encoding.
 
-    if isempty(multis)
-        println(io, "No multicolor points found.")
-        return
+- colors == 2: one boolean var per point
+- colors == 3: triples (R,B,G) per point
+"""
+function print_model_analysis(io::IO, model::AbstractVector{<:Integer}, colors::Int; show_points::Bool=false)
+    if colors == 2
+        print_2color_model_analysis(io, model)
+    elseif colors == 3
+        print_3color_model_analysis(io, model; show_points=show_points)
+    else
+        throw(ArgumentError("Unsupported colors=$colors; expected 2 or 3"))
     end
-
-    println(io, "Multicolor points: ", length(multis))
-    println(io, "  RB:  ", bd.rb)
-    println(io, "  RG:  ", bd.rg)
-    println(io, "  BG:  ", bd.bg)
-    println(io, "  RBG: ", bd.rbg)
-end
-
-"""
-Count multicolor points by type. Returns (rb, rg, bg, rbg).
-"""
-function multicolor_breakdown(model::AbstractVector{<:Integer})
-    bd = point_color_breakdown(model)
-    return (rb=length(bd.rb), rg=length(bd.rg), bg=length(bd.bg), rbg=length(bd.rbg))
-end
-
-"""
-Pretty-print multicolor counts only.
-"""
-function print_multicolor_breakdown(io::IO, model::AbstractVector{<:Integer})
-    stats = multicolor_breakdown(model)
-    println(io, "Multicolor points:")
-    println(io, "  RB  (1,1,0): ", stats.rb)
-    println(io, "  RG  (1,0,1): ", stats.rg)
-    println(io, "  BG  (0,1,1): ", stats.bg)
-    println(io, "  RBG (1,1,1): ", stats.rbg)
 end
 
 end # module

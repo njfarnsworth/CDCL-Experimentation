@@ -4,22 +4,28 @@ export Config, default_config, parse_args
 
 mutable struct Config
 
-    # cube parameters (for [k]^n incidence analysis)
+    # cube / instance parameters
     k::Int
     n::Int
+    colors::Int
+
+    # experiment runs
+    runs::Int
 
     # limits / prints
     max_conflicts::Int
     max_seconds::Float64
     verbose::Int
-    progress_every::Int 
+    progress_every::Int
 
-    # branching / VSIDS
+    # branching / VSIDS / phase selection
     branch_policy::Symbol
+    phase_policy::Symbol
     vsids_decay::Float64
     vsids_max_thresh::Float64
+    incidence_lambda::Float64
 
-    # restarts 
+    # restarts
     restarts::Bool
     restart_base::Int
     restart_mult::Float64
@@ -37,20 +43,26 @@ end
 function default_config()::Config
     return Config(
 
-        # cube params
+        # cube / instance params
         3, # k
         3, # n
+        3, # colors
+
+        # experiment runs
+        1, # runs
 
         # limits
-        0, # max conflicts
-        0.0, # max time
-        0, # verbose
-        0, # progress every
+        0,      # max conflicts
+        0.0,    # max time
+        0,      # verbose
+        0,      # progress every
 
-        # VSIDS
-        :vsids,
+        # branching / VSIDS / phase
+        :vsids,   # branch_policy
+        :saved,   # phase_policy (:saved or :negative)
         0.95,
         1e100,
+        0.0,    # incidence_lambda (0 disables weighting)
 
         # restarts
         true,
@@ -91,7 +103,7 @@ function parse_args(args::Vector{String})
         if occursin('=', a)
             parts = split(a, '='; limit=2)
             a = parts[1]
-            insert!(args, i+1, parts[2])
+            insert!(args, i + 1, parts[2])
         end
 
         # helper to read next token
@@ -99,7 +111,7 @@ function parse_args(args::Vector{String})
             if i == length(args)
                 error("Missing value after $(a)")
             end
-            return args[i+1]
+            return args[i + 1]
         end
 
 
@@ -109,8 +121,23 @@ function parse_args(args::Vector{String})
 
         if a == "--k"
             cfg.k = parse(Int, next_value()); i += 2; continue
+
         elseif a == "--n"
             cfg.n = parse(Int, next_value()); i += 2; continue
+
+        elseif a == "--colors"
+            cfg.colors = parse(Int, next_value())
+            cfg.colors in (2, 3) || error("--colors must be 2 or 3")
+            i += 2; continue
+        end
+
+
+        # ----------------------------------------------------
+        # experiment control
+        # ----------------------------------------------------
+
+        if a == "--runs"
+            cfg.runs = parse(Int, next_value()); i += 2; continue
         end
 
 
@@ -131,25 +158,39 @@ function parse_args(args::Vector{String})
 
         if a == "--max-conflicts"
             cfg.max_conflicts = parse(Int, next_value()); i += 2; continue
+
         elseif a == "--max-seconds"
             cfg.max_seconds = parse(Float64, next_value()); i += 2; continue
+
         elseif a == "--verbose"
             cfg.verbose = parse(Int, next_value()); i += 2; continue
+
         elseif a == "--progress-every"
             cfg.progress_every = parse(Int, next_value()); i += 2; continue
         end
 
 
         # ----------------------------------------------------
-        # branching / VSIDS
+        # branching / VSIDS / phase selection
         # ----------------------------------------------------
 
         if a == "--branch"
             cfg.branch_policy = Symbol(next_value()); i += 2; continue
+
+        elseif a == "--phase"
+            cfg.phase_policy = Symbol(next_value())
+            cfg.phase_policy in (:saved, :negative) ||
+                error("--phase must be one of: saved, negative")
+            i += 2; continue
+
         elseif a == "--vsids-decay"
             cfg.vsids_decay = parse(Float64, next_value()); i += 2; continue
+
         elseif a == "--vsids-max-thresh"
             cfg.vsids_max_thresh = parse(Float64, next_value()); i += 2; continue
+
+        elseif a == "--incidence-lambda"
+            cfg.incidence_lambda = parse(Float64, next_value()); i += 2; continue
         end
 
 
@@ -159,7 +200,7 @@ function parse_args(args::Vector{String})
 
         if a == "--restarts"
             v = lowercase(next_value())
-            cfg.restarts = (v in ("1","true","t","yes","y"))
+            cfg.restarts = (v in ("1", "true", "t", "yes", "y"))
             i += 2; continue
 
         elseif a == "--restart-base" || a == "--restarts-base"
@@ -185,7 +226,7 @@ function parse_args(args::Vector{String})
 
         elseif a == "--keep-ternary"
             v = lowercase(next_value())
-            cfg.keep_ternary = (v in ("1","true","t","yes","y"))
+            cfg.keep_ternary = (v in ("1", "true", "t", "yes", "y"))
             i += 2; continue
 
         elseif a == "--clause-bump"
@@ -205,11 +246,17 @@ Solver configuration flags:
 Instance parameters:
   --k <int>
   --n <int>
+  --colors <2|3>
+
+Experiment:
+  --runs <int>
 
 Branching:
   --branch <vsids|first>
+  --phase <saved|negative>
   --vsids-decay <float>
   --vsids-max-thresh <float>
+  --incidence-lambda <float>
 
 Restarts:
   --restarts <true|false>
@@ -232,7 +279,7 @@ Output:
   --progress-every <int>
 
 You can also pass the CNF as a positional argument:
-  julia run_cdcl.jl cnfs/hj/hj33_4.cnf --k 3 --n 5
+  julia run_cdcl.jl cnfs/hj/hj33_4.cnf --k 3 --n 5 --colors 3
 """)
             exit()
         end

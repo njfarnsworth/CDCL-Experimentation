@@ -1,4 +1,7 @@
-p cnf 2187 13017
+p cnf 2187 13019
+c the first two clauses were added for symmetry breaking
+1 0
+4 5 0
 1 2 3 0
 -1 -2 0
 -1 -3 0

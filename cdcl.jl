@@ -3,6 +3,7 @@ include("dpll.jl")
 include("stats.jl")
 include("vsids.jl")
 include("phasesaving.jl")
+include("negativepolarity.jl")
 include("restarts.jl")
 include("clause_del.jl")
 include("config.jl")
@@ -11,29 +12,30 @@ using .DIMACS
 using .CDCLStats
 using .VSIDS
 using .PhaseSaving
+using .NegativePolarity
 using .Restarts
 using .ClauseDeletion
 using .SolverConfig
 
-mutable struct Solver 
+mutable struct Solver
     # problem-specific
     nvars::Int
     clauses::Vector{Vector{Int}}
 
-    # assignment state 
+    # assignment state
     model::Vector{Int8}
     level::Vector{Int} # decision level per variable (0 if unassigned)
     antecedent::Vector{Int} # clause implying assignment (0 if unassigned)
 
     # trail / decision stack
     trail::Vector{Int} # the variables that have been assigned
-    trail_lim::Vector{Int} 
-    qhead::Int 
+    trail_lim::Vector{Int}
+    qhead::Int
 
     # watched literals
     watchlist::Vector{Vector{Int}} # counts the clauses watching a given literal
     watch1::Vector{Int} # per clause, index of watch1
-    watch2::Vector{Int}  # per clause, index of watch2
+    watch2::Vector{Int} # per clause, index of watch2
 
     st::Stats
     vsids::VSIDSState
@@ -49,7 +51,7 @@ end
 end
 
 @inline function value_lit(lit::Int, model::Vector{Int8})::Int8
-    # what value of the variable does the binary assignment output 
+    # what value of the variable does the binary assignment output
     v = abs(lit)
     a = model[v]
 
@@ -66,21 +68,21 @@ function Solver(cnf::CNF, cfg::Config)
     n = cnf.nvars
     cls = Vector{Vector{Int}}(undef, length(cnf.clauses))
 
-    for (i,c) in enumerate(cnf.clauses)
+    for (i, c) in enumerate(cnf.clauses)
         cls[i] = copy(c.lits)
     end
 
-    model = fill(Int8(0),n)
-    level = fill(0,n)
-    antecedent = fill(0,n)
+    model = fill(Int8(0), n)
+    level = fill(0, n)
+    antecedent = fill(0, n)
 
     trail = Int[]
     trail_lim = Int[]
     qhead = 1
 
     watchlist = [Int[] for _ in 1:2n]
-    watch1 = fill(0,length(cls))
-    watch2 = fill(0,length(cls))
+    watch1 = fill(0, length(cls))
+    watch2 = fill(0, length(cls))
 
     for cid in 1:length(cls)
         c = cls[cid]
@@ -96,28 +98,40 @@ function Solver(cnf::CNF, cfg::Config)
         end
     end
 
-    vs = init_vsids(n, cfg.vsids_decay, cfg.vsids_max_thresh)
+    inc_w = build_incidence_weights(n, cfg.k, cfg.n, cfg.colors)
+
+    vs = init_vsids(
+        n,
+        cfg.vsids_decay,
+        cfg.vsids_max_thresh;
+        incidence_weight = inc_w,
+        incidence_lambda = cfg.incidence_lambda
+    )
+
     ph = init_phase(n)
     rst = cfg.restarts ?
         init_restarts(cfg.restart_base, cfg.restart_mult) :
-        init_restarts(0, 1.0) # disable 
+        init_restarts(0, 1.0) # disable
     cdb = init_clausedb(
-        length(cls), 
-        cfg.reduce_every, 
-        cfg.delete_frac, 
+        length(cls),
+        cfg.reduce_every,
+        cfg.delete_frac,
         cfg.glue_lbd,
-        cfg.keep_ternary)
+        cfg.keep_ternary
+    )
 
-    return Solver(n,cls,model,level,antecedent, 
-    trail, trail_lim, qhead, watchlist, watch1, 
-    watch2, Stats(), vs, ph, rst, cdb, cfg)
+    return Solver(
+        n, cls, model, level, antecedent,
+        trail, trail_lim, qhead, watchlist, watch1,
+        watch2, Stats(), vs, ph, rst, cdb, cfg
+    )
 end
 
 @inline decision_level(S::Solver) = length(S.trail_lim) # returns the current decision level of the solver
 
 function new_decision_level!(S::Solver)
-    # makes the next position of the trail the start of a new decision level 
-    push!(S.trail_lim, length(S.trail)+1)
+    # makes the next position of the trail the start of a new decision level
+    push!(S.trail_lim, length(S.trail) + 1)
     return nothing
 end
 
@@ -144,29 +158,29 @@ function enqueue!(S::Solver, lit::Int, ant_cid::Int)::Bool
 
         return true
     else
-        return cur == want 
+        return cur == want
     end
 end
 
 function backtrack!(S::Solver, lvl::Int)
-    @assert 0 <= lvl <= decision_level(S) # check that the backtrack level is valid 
+    @assert 0 <= lvl <= decision_level(S) # check that the backtrack level is valid
 
     # --- instrumentation ---
     S.st.backtracks += 1
 
-    # if lvl == 0, clear everything. else, clear everything past the end of lvl 
+    # if lvl == 0, clear everything. else, clear everything past the end of lvl
     if lvl == 0
         target_len = 0
     elseif lvl == decision_level(S)
         target_len = length(S.trail)
     else
-        target_len = S.trail_lim[lvl + 1] - 1 # one before where the next level starts 
+        target_len = S.trail_lim[lvl + 1] - 1 # one before where the next level starts
     end
 
-    for i in length(S.trail):-1:(target_len+1) # inclusively iterate backwards from the end of the trail to one after the target
-        lit = S.trail[i] # get the literal and corresponding variable 
+    for i in length(S.trail):-1:(target_len + 1) # inclusively iterate backwards from the end of the trail to one after the target
+        lit = S.trail[i] # get the literal and corresponding variable
         v = abs(lit)
-        S.model[v] = Int8(0) # reset all of the stats for that variable 
+        S.model[v] = Int8(0) # reset all of the stats for that variable
         S.level[v] = 0
         S.antecedent[v] = 0
         heap_push!(S.vsids, S.vsids.activity[v], v)
@@ -174,7 +188,7 @@ function backtrack!(S::Solver, lvl::Int)
 
     resize!(S.trail, target_len)
     resize!(S.trail_lim, lvl)
-    S.qhead = min(S.qhead, length(S.trail)+1) # resets qhead if it is now in an illegal range
+    S.qhead = min(S.qhead, length(S.trail) + 1) # resets qhead if it is now in an illegal range
 
     return nothing
 end
@@ -190,7 +204,7 @@ function propagate!(S::Solver)::Int
         S.qhead += 1
         S.st.propagations += 1
 
-        false_lit = -1*lit
+        false_lit = -1 * lit
         wl_index = lit_index(false_lit)
 
         w = S.watchlist[wl_index] # w is the list of clauses watching false_lit
@@ -198,15 +212,15 @@ function propagate!(S::Solver)::Int
         while i <= length(w) # iterate through those clauses
             cid = w[i]
 
-            if S.cdb.deleted[cid] # don't use deleted clauses 
+            if S.cdb.deleted[cid] # don't use deleted clauses
                 w[i] = w[end]
                 pop!(w)
                 continue
             end
 
-            c = S.clauses[cid] # get the clause 
+            c = S.clauses[cid] # get the clause
 
-            w1pos = S.watch1[cid] # get the watched literals from that clause 
+            w1pos = S.watch1[cid] # get the watched literals from that clause
             w2pos = S.watch2[cid]
             l1 = c[w1pos]
             l2 = c[w2pos]
@@ -222,16 +236,16 @@ function propagate!(S::Solver)::Int
                 other_pos = w1pos
                 other_lit = l1
                 other_is_w1 = true
-            else 
+            else
                 w[i] = w[end] # swap pop
-                pop!(w) 
+                pop!(w)
                 continue
             end
 
             if value_lit(other_lit, S.model) == Int8(1)
-                # if the other lit is true, the clause is satisfied 
+                # if the other lit is true, the clause is satisfied
                 i += 1
-                continue 
+                continue
             end
 
             # otherwise, try to find a new literal in the clause to watch instead of the false one
@@ -265,14 +279,14 @@ function propagate!(S::Solver)::Int
 
             # no replacement found, clause is unit or conflicting
             other_val = value_lit(other_lit, S.model)
-            if other_val == Int8(0) # unit clause, 
+            if other_val == Int8(0) # unit clause,
                 if !enqueue!(S, other_lit, cid)
                     # --- instrumentation ---
                     S.st.conflicts += 1
                     return cid # cid caused a conflict
                 end
-                i += 1 # otherwise, we're fine 
-            else 
+                i += 1 # otherwise, we're fine
+            else
                 # --- instrumentation ---
                 S.st.conflicts += 1
                 return cid # other lit was also false
@@ -283,7 +297,7 @@ function propagate!(S::Solver)::Int
 end
 
 function enqueue_unit_clauses!(S::Solver)::Bool
-    # decision level 0 assign all units 
+    # decision level 0 assign all units
     for (cid, clause) in enumerate(S.clauses)
         if length(clause) == 1
             lit = clause[1]
@@ -292,14 +306,14 @@ function enqueue_unit_clauses!(S::Solver)::Bool
             end
         end
     end
-    return true 
+    return true
 end
 
 function initial_propagate!(S::Solver)::Int
     # performs level 0 unit propagation
     ok = enqueue_unit_clauses!(S)
     if !ok
-        return -1 # unsat at root 
+        return -1 # unsat at root
     end
     conflict = propagate!(S)
     return conflict
@@ -309,7 +323,11 @@ function pick_branch_lit(S)::Int
     v = pick_branch_var(S.vsids, S.model) # choose the variable using vsids
     v == 0 && return 0 # if all variables are already assigned
 
-    return choose_literal(S.phase, v, Int8(1)) # choose its sign with phasesaving 
+    if S.cfg.phase_policy == :negative
+        return choose_negative_literal(v)
+    else
+        return choose_literal(S.phase, v, Int8(1)) # NEGATIVE PHASE SAVING
+    end
 end
 
 function solve_no_learning!(S::Solver)::Symbol
@@ -377,7 +395,7 @@ end
 end
 
 function add_clause!(S::Solver, c::Vector{Int})::Int
-    # adds a clause to the solver 
+    # adds a clause to the solver
     push!(S.clauses, c)
     cid = length(S.clauses)
 
@@ -390,7 +408,7 @@ function add_clause!(S::Solver, c::Vector{Int})::Int
         push!(S.watchlist[lit_index(c[1])], cid)
         push!(S.watchlist[lit_index(c[2])], cid)
     end
-    return cid 
+    return cid
 end
 
 function analyze_conflict_1uip(S::Solver, conflict_cid::Int)
@@ -400,7 +418,7 @@ function analyze_conflict_1uip(S::Solver, conflict_cid::Int)
     lit_of_var = fill(0, S.nvars)  # stores the signed lit currently in the working clause
     num_cur = Ref(0)
 
-    #  helper to add a literal to the working clause (one per var) 
+    # helper to add a literal to the working clause (one per var)
     @inline function add_lit!(lit::Int)
         v = abs(lit)
         if !seen[v]
@@ -419,7 +437,7 @@ function analyze_conflict_1uip(S::Solver, conflict_cid::Int)
 
     idx = length(S.trail)
 
-    # resolve until only one current-level literal remains 
+    # resolve until only one current-level literal remains
     while num_cur[] > 1
         # pick most recent current-level var that is in the clause
         pivot_lit = 0
@@ -492,7 +510,7 @@ end
 
 function solve_with_learning!(S::Solver)::Symbol
     reset!(S.st)
-    start_timer!(S.st)
+    st = start_timer!(S.st)
 
     root_conflict = initial_propagate!(S)
     if root_conflict == -1 || root_conflict != 0
@@ -508,11 +526,11 @@ function solve_with_learning!(S::Solver)::Symbol
         end
 
         new_decision_level!(S)
-        enqueue!(S, lit, 0) # add lit as a decision variable 
+        enqueue!(S, lit, 0) # add lit as a decision variable
 
         while true
             conflict = propagate!(S) # perform unit prop after setting the new deicison variable
-            if conflict == 0 
+            if conflict == 0
                 break # there is no conflict, continue to next decision variable
             end
 
@@ -527,7 +545,7 @@ function solve_with_learning!(S::Solver)::Symbol
                 stop_timer!(S.st)
                 return :unsat
             end
-            
+
             lbd = compute_lbd(S.level, learned, decision_level(S))
 
             bump_clause!(S.vsids, learned)
@@ -541,7 +559,7 @@ function solve_with_learning!(S::Solver)::Symbol
 
             # learned clause should be unit after backtrack, so enqueue asserting literal
 
-            ok = enqueue!(S, asserting, learned_cid) # force the assering lit to be true 
+            ok = enqueue!(S, asserting, learned_cid) # force the asserting lit to be true
             @assert ok
             # continue this loop until no more conflicts
 
@@ -551,23 +569,21 @@ function solve_with_learning!(S::Solver)::Symbol
                 S.st.deleted_clauses += deleted_now
             end
 
-            if should_restart(S.rst) && decision_level(S) > 0 # if we should restart and we're not at the root 
-                backtrack!(S,0) # backtrack to the root
+            if should_restart(S.rst) && decision_level(S) > 0 # if we should restart and we're not at the root
+                backtrack!(S, 0) # backtrack to the root
                 do_restart!(S.rst)
                 S.st.restarts += 1
             end
 
-
-            if (S.cfg.max_conflicts > 0 && S.st.conflicts >= S.cfg.max_conflicts) || (S.cfg.max_seconds > 0 && (time() - st) >= S.cfg.max_seconds)
+            if (S.cfg.max_conflicts > 0 && S.st.conflicts >= S.cfg.max_conflicts) ||
+               (S.cfg.max_seconds > 0 && (time() - st) >= S.cfg.max_seconds)
                 stop_timer!(S.st)
-                return :unknown # maxed out on conflicts or time 
+                return :unknown # maxed out on conflicts or time
             end
-
 
             if S.cfg.verbose > 0
                 maybe_progress(S)
             end
-
         end
     end
 end
@@ -581,13 +597,15 @@ end
 @inline function maybe_progress(S::Solver)
     pe = S.cfg.progress_every
     if pe > 0 && (S.st.conflicts % pe == 0)
-        ln("conflicts=", S.st.conflicts,
-                " decisions=", S.st.decisions,
-                " props=", S.st.propagations,
-                " level=", decision_level(S),
-                " learned=", S.st.learned_clauses,
-                " deleted=", S.st.deleted_clauses,
-                " restarts=", S.st.restarts)
+        println(
+            "conflicts=", S.st.conflicts,
+            " decisions=", S.st.decisions,
+            " props=", S.st.propagations,
+            " level=", decision_level(S),
+            " learned=", S.st.learned_clauses,
+            " deleted=", S.st.deleted_clauses,
+            " restarts=", S.st.restarts
+        )
     end
     return nothing
 end
