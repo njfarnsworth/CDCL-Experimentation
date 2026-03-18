@@ -1,0 +1,46 @@
+WARNING: replacing module DIMACS.
+Running solver 1 time(s)...
+
+==============================
+FINAL RESULT: sat
+==============================
+
+Average solve time over 1 runs:
+  avg time = 0.9869467919999999 seconds
+           = 986.946792 milliseconds
+
+Solver stats (from final run):
+
+=== Solver Stats ===
+decisions:       313359
+propagations:    3524742
+enqueues:        3652976
+implications:    3339617
+conflicts:       21276
+backtracks:      21287
+learned clauses: 21276
+restarts: 11
+deleted clauses: 17915
+solve time (ms): 986.946792
+
+VSIDS summary:
+  nonzero vars = 4092 / 4096
+  max activity = 4.834540931018601e74
+
+Incidence vs Activity correlation:
+  Pearson (all)        = 0.14091569321821032
+  Pearson (activity>0) = 0.1406990049550191
+
+2-Color Model Statistics:
+  red points        = 2043
+  blue points       = 2053
+  unassigned points = 0
+
+Antipalindromic Pair Statistics:
+  total pairs        = 2048
+  antipal pairs      = 1365
+  same-color pairs   = 683
+  incomplete pairs   = 0
+  antipal fraction   = 0.66650390625
+
+Model verifies? true
