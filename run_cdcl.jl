@@ -74,9 +74,23 @@ end
 # -----------------------------
 # Single run
 # -----------------------------
-
 function single_run(filename::String; cfg::Config)
-    cnf = DIMACS.load_cnf(filename)
+    base_cnf = DIMACS.load_cnf(filename)
+
+    cnf = DIMACS.load_cnf(
+        filename;
+        add_symmetry_breaking = cfg.symmetry_breaking,
+        k = cfg.k,
+        n = cfg.n,
+        sb_mode = cfg.sb_mode
+    )
+
+    println("Base clauses:   ", base_cnf.nclauses)
+    println("Loaded clauses: ", cnf.nclauses)
+    println("Added clauses:  ", cnf.nclauses - base_cnf.nclauses)
+    println("SB enabled:     ", cfg.symmetry_breaking)
+    println("SB mode:        ", cfg.sb_mode)
+
     S = Solver(cnf, cfg)
 
     result = solve_with_learning!(S)
@@ -106,6 +120,13 @@ function run_file(filename::String; cfg::Config = default_config())
     last_corr = nothing
 
     println("Running solver $nruns time(s)...")
+
+
+    println("Config:")
+    println("  k=", cfg.k, " n=", cfg.n, " colors=", cfg.colors)
+    println("  symmetry_breaking=", cfg.symmetry_breaking,
+            " mode=", cfg.sb_mode)
+
 
     for r in 1:nruns
         result, S, inc, act, corr = single_run(filename; cfg=cfg)

@@ -1,59 +1,55 @@
-include("parser.jl")
+module DPLL
+
 using Random
-using .DIMACS
-const DPLL_NODES = Ref(0)    
+using ..DIMACS: CNF
+
+const DPLL_NODES = Ref(0)
 const DPLL_DECISIONS = Ref(0)
 
-@inline lit_var(lit::Int) = abs(lit) # abs of a literal
+@inline lit_var(lit::Int) = abs(lit)
 
 @inline function lit_is_true(lit::Int, model::Vector{Int8})::Bool
-    # determines whether a lit is true
     v = abs(lit)
     val = model[v]
-    return (lit > 0 && val == 1 || lit < 0 && val == -1)
+    return (lit > 0 && val == 1) || (lit < 0 && val == -1)
 end
 
 @inline function lit_is_false(lit::Int, model::Vector{Int8})::Bool
-    # determines whether a lit is false
     v = abs(lit)
     val = model[v]
-    return (lit > 0 && val == -1 || lit < 0 && val == 1)
+    return (lit > 0 && val == -1) || (lit < 0 && val == 1)
 end
 
 @inline function assign_lit!(lit::Int, model::Vector{Int8})::Bool
-    # can we assign this literal to be true without contradicting its current assignment?
     v = abs(lit)
-    want::Int8 = lit > 0 ? Int8(1) : Int8(-1) # the value that we need for the lit to be true
-    cur = model[v] # the value assigned to the lit
+    want::Int8 = lit > 0 ? Int8(1) : Int8(-1)
+    cur = model[v]
 
-    if cur == 0 # if the lit isn't assigned a value yet
+    if cur == 0
         model[v] = want
         return true
     else
         return cur == want
     end
-
-
 end
 
 function clause_status(lits::Vector{Int}, model::Vector{Int8})::Symbol
- # determines whether a clause is open, satisfied, or conflicting w the model
     any_unassigned = false
-    for lit in lits # look for true, false, and unassigned literals 
+    for lit in lits
         if lit_is_true(lit, model)
             return :sat
-        elseif !lit_is_false(lit,model)
-            any_unassigned = true 
+        elseif !lit_is_false(lit, model)
+            any_unassigned = true
         end
     end
-    return any_unassigned ? :open : :conflict 
+    return any_unassigned ? :open : :conflict
 end
 
 function formula_status(cnf::CNF, model::Vector{Int8})::Symbol
     any_open = false
     for c in cnf.clauses
         stat = clause_status(c.lits, model)
-        if stat ==:conflict
+        if stat == :conflict
             return :conflict
         elseif stat == :open
             any_open = true
@@ -65,29 +61,28 @@ end
 function find_unit_literal(cnf::CNF, model::Vector{Int8})::Int
     for c in cnf.clauses
         stat = clause_status(c.lits, model)
-        if stat == :sat; continue; end
+        if stat == :sat
+            continue
+        end
 
         unassigned = 0
         candidate = 0
 
         for lit in c.lits
-            # search for unary clause
-            if lit_is_true(lit, model) 
-                # clause already satisfied
+            if lit_is_true(lit, model)
                 unassigned = 2
                 break
             elseif !lit_is_false(lit, model)
-                # clause not satisfied
                 unassigned += 1
                 candidate = lit
                 if unassigned > 1
                     break
                 end
-            end   
+            end
         end
 
         if unassigned == 1
-            return candidate # we found a unary clause
+            return candidate
         end
     end
     return 0
@@ -103,8 +98,8 @@ function unit_propagate!(cnf::CNF, model::Vector{Int8})::Bool
         if u == 0
             return true
         end
-        
-        if !assign_lit!(u, model) # unable to assign the unary clause without causing conflict
+
+        if !assign_lit!(u, model)
             return false
         end
     end
@@ -121,48 +116,11 @@ function choose_random_literal(model::Vector{Int8}, nvars::Int)::Int
     isempty(unassigned) && return 0
 
     v = rand(unassigned)
-    pol = rand(Bool) ? 1 : -1 
-
+    pol = rand(Bool) ? 1 : -1
     return v * pol
 end
 
-function dpll(cnf::CNF, model::Vector{Int8})
-    # runs the main algorithm
-    DPLL_NODES[] += 1
-
-    if !simplify!(cnf, model)
-        return false, nothing
-    end
-
-    # check status
-    stat = formula_status(cnf, model)
-    if stat == :sat
-        @assert check_model(cnf, model)
-        return true, model
-    elseif stat == :conflict
-        return false, nothing
-    end
-
-    lit = choose_random_literal(model, cnf.nvars)
-    DPLL_DECISIONS[] += 1
-
-    m1 = copy(model)
-    if assign_lit!(lit, m1)
-        sat, sol = dpll(cnf, m1)
-        if sat
-            return true, sol
-        end
-    end
-
-    m2 = copy(model)
-    if assign_lit!(-lit, m2)
-        return dpll(cnf, m2)
-    end
-    return false, nothing
-end
-
 function check_model(cnf::CNF, model::Vector{Int8})::Bool
-    # checks that a model actually satisfies the CNF 
     for c in cnf.clauses
         ok = false
         for lit in c.lits
@@ -171,9 +129,11 @@ function check_model(cnf::CNF, model::Vector{Int8})::Bool
                 break
             end
         end
-        if !ok; return false; end
+        if !ok
+            return false
+        end
     end
-    return true 
+    return true
 end
 
 function find_pure_literal(cnf::CNF, model::Vector{Int8})::Int
@@ -187,10 +147,10 @@ function find_pure_literal(cnf::CNF, model::Vector{Int8})::Int
         end
         for lit in c.lits
             v = abs(lit)
-            if model[v] != 0 # variable already assigned, continue
+            if model[v] != 0
                 continue
             end
-            if lit > 0 # find sign of lit
+            if lit > 0
                 seen_pos[v] = true
             else
                 seen_neg[v] = true
@@ -222,12 +182,12 @@ function pure_eliminate!(cnf::CNF, model::Vector{Int8})::Bool
         end
 
         if !assign_lit!(p, model)
-            return false 
+            return false
         end
     end
 end
 
-function simplify!(cnf::CNF, model::Vector{Int8})
+function simplify!(cnf::CNF, model::Vector{Int8})::Bool
     while true
         if !unit_propagate!(cnf, model)
             return false
@@ -240,4 +200,42 @@ function simplify!(cnf::CNF, model::Vector{Int8})
             return false
         end
     end
+end
+
+function dpll(cnf::CNF, model::Vector{Int8})
+    DPLL_NODES[] += 1
+
+    if !simplify!(cnf, model)
+        return false, nothing
+    end
+
+    stat = formula_status(cnf, model)
+    if stat == :sat
+        @assert check_model(cnf, model)
+        return true, model
+    elseif stat == :conflict
+        return false, nothing
+    end
+
+    lit = choose_random_literal(model, cnf.nvars)
+    DPLL_DECISIONS[] += 1
+
+    m1 = copy(model)
+    if assign_lit!(lit, m1)
+        sat, sol = dpll(cnf, m1)
+        if sat
+            return true, sol
+        end
+    end
+
+    m2 = copy(model)
+    if assign_lit!(-lit, m2)
+        return dpll(cnf, m2)
+    end
+
+    return false, nothing
+end
+
+export dpll, DPLL_NODES, DPLL_DECISIONS
+
 end

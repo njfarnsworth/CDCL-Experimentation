@@ -25,6 +25,10 @@ mutable struct Config
     vsids_max_thresh::Float64
     incidence_lambda::Float64
 
+    # symmetry breaking
+    symmetry_breaking::Bool
+    sb_mode::Symbol
+
     # restarts
     restarts::Bool
     restart_base::Int
@@ -49,20 +53,24 @@ function default_config()::Config
         3, # colors
 
         # experiment runs
-        1, # runs
+        1,
 
         # limits
-        0,      # max conflicts
-        0.0,    # max time
-        0,      # verbose
-        0,      # progress every
+        0,
+        0.0,
+        0,
+        0,
 
         # branching / VSIDS / phase
-        :vsids,   # branch_policy
-        :saved,   # phase_policy (:saved or :negative)
+        :vsids,
+        :saved,
         0.95,
         1e100,
-        0.0,    # incidence_lambda (0 disables weighting)
+        0.0,
+
+        # symmetry breaking
+        false,           # OFF by default
+        :anchor_only,    # default mode
 
         # restarts
         true,
@@ -106,7 +114,6 @@ function parse_args(args::Vector{String})
             insert!(args, i + 1, parts[2])
         end
 
-        # helper to read next token
         function next_value()
             if i == length(args)
                 error("Missing value after $(a)")
@@ -175,12 +182,15 @@ function parse_args(args::Vector{String})
         # ----------------------------------------------------
 
         if a == "--branch"
-            cfg.branch_policy = Symbol(next_value()); i += 2; continue
+            cfg.branch_policy = Symbol(next_value())
+            cfg.branch_policy in (:vsids, :first, :triplet_vsids) ||
+                error("--branch must be one of: vsids, first, triplet_vsids")
+            i += 2; continue
 
         elseif a == "--phase"
             cfg.phase_policy = Symbol(next_value())
-            cfg.phase_policy in (:saved, :negative) ||
-                error("--phase must be one of: saved, negative")
+            cfg.phase_policy in (:saved, :negative, :antipal) ||
+                error("--phase must be one of: saved, negative, antipal")
             i += 2; continue
 
         elseif a == "--vsids-decay"
@@ -191,6 +201,23 @@ function parse_args(args::Vector{String})
 
         elseif a == "--incidence-lambda"
             cfg.incidence_lambda = parse(Float64, next_value()); i += 2; continue
+        end
+
+
+        # ----------------------------------------------------
+        # symmetry breaking
+        # ----------------------------------------------------
+
+        if a == "--symmetry-breaking"
+            v = lowercase(next_value())
+            cfg.symmetry_breaking = (v in ("1", "true", "t", "yes", "y"))
+            i += 2; continue
+
+        elseif a == "--sb-mode"
+            cfg.sb_mode = Symbol(next_value())
+            cfg.sb_mode in (:anchor_only, :anchor_axis_order, :none) ||
+                error("--sb-mode must be one of: anchor_only, anchor_axis_order, none")
+            i += 2; continue
         end
 
 
@@ -252,11 +279,15 @@ Experiment:
   --runs <int>
 
 Branching:
-  --branch <vsids|first>
-  --phase <saved|negative>
+  --branch <vsids|first|triplet_vsids>
+  --phase <saved|negative|antipal>
   --vsids-decay <float>
   --vsids-max-thresh <float>
   --incidence-lambda <float>
+
+Symmetry breaking:
+  --symmetry-breaking <true|false>
+  --sb-mode <anchor_only|anchor_axis_order|none>
 
 Restarts:
   --restarts <true|false>
@@ -264,7 +295,7 @@ Restarts:
   --restart-mult <float>
 
 Clause deletion:
-  --reduce-every <int>      (0 = disable deletion)
+  --reduce-every <int>
   --delete-frac <float>
   --glue-lbd <int>
   --keep-ternary <true|false>
@@ -278,8 +309,6 @@ Output:
   --verbose <int>
   --progress-every <int>
 
-You can also pass the CNF as a positional argument:
-  julia run_cdcl.jl cnfs/hj/hj33_4.cnf --k 3 --n 5 --colors 3
 """)
             exit()
         end
@@ -290,7 +319,15 @@ You can also pass the CNF as a positional argument:
 
 
     if cnf_file == ""
-        error("No CNF file provided. Use --cnf <file> or pass it as a positional argument.")
+        error("No CNF file provided.")
+    end
+
+    if cfg.phase_policy == :antipal && cfg.colors != 2
+        error("--phase antipal is only valid when --colors 2")
+    end
+
+    if cfg.branch_policy == :triplet_vsids && cfg.colors != 3
+        error("--branch triplet_vsids is only valid when --colors 3")
     end
 
     return cnf_file, cfg

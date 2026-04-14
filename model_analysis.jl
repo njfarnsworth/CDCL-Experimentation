@@ -4,6 +4,7 @@ export count_true_by_mod3_model, count_true_by_mod3_trail, write_mod3_counts
 export verify_model_cnf, verify_model_solver
 export point_color_breakdown, print_point_color_breakdown
 export point_activity_sums
+export antipal_pair_count, antipal_pair_stats, print_antipal_pair_stats
 export print_2color_model_analysis, print_3color_model_analysis, print_model_analysis
 
 # -----------------------------
@@ -192,6 +193,108 @@ function point_activity_sums(S, colors::Int)::Dict{Int,Float64}
 end
 
 # -----------------------------
+# 2-color antipalindromic pair analysis
+# -----------------------------
+
+"""
+Count the number of antipalindromic pairs in a 2-color model.
+
+Pairing is 1-based:
+  partner(i) = n + 1 - i
+
+Each pair is counted once, so only i < partner(i) is considered.
+
+A pair is antipalindromic if:
+- both endpoints are assigned, and
+- they have opposite colors/signs
+
+Returns the number of antipalindromic pairs.
+"""
+function antipal_pair_count(model::AbstractVector{<:Integer})::Int
+    n = length(model)
+    count_pairs = 0
+
+    @inbounds for i in 1:n
+        j = n + 1 - i
+        if i < j
+            xi = model[i]
+            xj = model[j]
+            if xi != 0 && xj != 0 && xi == -xj
+                count_pairs += 1
+            end
+        end
+    end
+
+    return count_pairs
+end
+
+"""
+Return detailed antipalindromic pair statistics for a 2-color model.
+
+Pairing is 1-based:
+  partner(i) = n + 1 - i
+
+Each pair is counted once.
+
+Returns a named tuple with:
+- total_pairs
+- antipal_pairs
+- same_color_pairs
+- incomplete_pairs
+- antipal_fraction
+"""
+function antipal_pair_stats(model::AbstractVector{<:Integer})
+    n = length(model)
+
+    total_pairs = 0
+    antipal_pairs = 0
+    same_color_pairs = 0
+    incomplete_pairs = 0
+
+    @inbounds for i in 1:n
+        j = n + 1 - i
+        if i < j
+            total_pairs += 1
+
+            xi = model[i]
+            xj = model[j]
+
+            if xi == 0 || xj == 0
+                incomplete_pairs += 1
+            elseif xi == -xj
+                antipal_pairs += 1
+            else
+                same_color_pairs += 1
+            end
+        end
+    end
+
+    antipal_fraction = total_pairs == 0 ? 0.0 : antipal_pairs / total_pairs
+
+    return (
+        total_pairs = total_pairs,
+        antipal_pairs = antipal_pairs,
+        same_color_pairs = same_color_pairs,
+        incomplete_pairs = incomplete_pairs,
+        antipal_fraction = antipal_fraction
+    )
+end
+
+"""
+Pretty-print antipalindromic pair statistics for a 2-color model.
+"""
+function print_antipal_pair_stats(io::IO, model::AbstractVector{<:Integer})
+    st = antipal_pair_stats(model)
+
+    println(io, "Antipalindromic Pair Statistics:")
+    println(io, "  total pairs        = ", st.total_pairs)
+    println(io, "  antipal pairs      = ", st.antipal_pairs)
+    println(io, "  same-color pairs   = ", st.same_color_pairs)
+    println(io, "  incomplete pairs   = ", st.incomplete_pairs)
+    println(io, "  antipal fraction   = ", st.antipal_fraction)
+end
+
+# -----------------------------
 # 2-color model analysis
 # -----------------------------
 
@@ -213,6 +316,9 @@ function print_2color_model_analysis(io::IO, model::AbstractVector{<:Integer})
     println(io, "  red points        = ", num_red)
     println(io, "  blue points       = ", num_blue)
     println(io, "  unassigned points = ", num_unassigned)
+    println(io)
+
+    print_antipal_pair_stats(io, model)
 end
 
 # -----------------------------
