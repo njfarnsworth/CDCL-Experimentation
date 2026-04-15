@@ -3,7 +3,7 @@ include("dpll.jl")
 
 println("cnf loading...")
 
-cnf = DIMACS.load_cnf("../cnfs/hj/HJ_3_3_4.cnf")
+cnf = DIMACS.load_cnf("../CNFS/HJ_3_3_4.cnf")
 
 println("running SAT solver for time")
 

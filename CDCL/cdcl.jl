@@ -1,11 +1,8 @@
 include("parser.jl")
-include("dpll.jl")
 include("stats.jl")
 include("vsids.jl")
-include("triplet_vsids.jl")
 include("phasesaving.jl")
 include("antipalindromic_phase.jl")
-include("negativepolarity.jl")
 include("restarts.jl")
 include("clause_del.jl")
 include("config.jl")
@@ -13,10 +10,8 @@ include("config.jl")
 using .DIMACS
 using .CDCLStats
 using .VSIDS
-using .TripletVSIDS
 using .PhaseSaving
 using .AntiPalindromicPhase
-using .NegativePolarity
 using .Restarts
 using .ClauseDeletion
 using .SolverConfig
@@ -311,11 +306,7 @@ function initial_propagate!(S::Solver)::Int
 end
 
 function pick_branch_var_configured(S::Solver)::Int
-    if S.cfg.branch_policy == :triplet_vsids
-        return TripletVSIDS.pick_branch_var_triplet(S.vsids, S.model; agg=:sum)
-    else
-        return VSIDS.pick_branch_var(S.vsids, S.model)
-    end
+    return VSIDS.pick_branch_var(S.vsids, S.model)
 end
 
 function pick_branch_lit(S::Solver)::Int
