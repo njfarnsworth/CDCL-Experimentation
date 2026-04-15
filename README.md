@@ -30,8 +30,12 @@
  
 ## Usage
 
-Run CDCL:
-julia run_cdcl.jl ../CNFS/HJ_3_2_3.cnf --k=<k> --n=<n> --colors=<r>
+To run the CDCL solver on a CNF instance, use:
 
-Run DPLL:
-julia run_dpll.jl  (edit the CNF file path directly inside the runner)
+`julia run_cdcl.jl <path_to_cnf> --k=<k> --n=<n> --colors=<r>`
+
+where `<path_to_cnf>` is the path to the input file.
+
+To run the DPLL solver, use: 
+
+`julia run_dpll.jl`  (edit the CNF file path directly inside the runner)
