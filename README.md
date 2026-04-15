@@ -27,3 +27,11 @@
 - **score_gen** – Folder for generating incidence scoring schemes
   - `IncidenceScores.jl` – Computes incidence-based scores for HJ-SAT
   - `NoScores.jl` – Assigns uniform scores (used for purely sequential variable ordering)
+ 
+## Usage
+
+Run CDCL:
+julia run_cdcl.jl ../CNFS/HJ_3_2_3.cnf --k=<k> --n=<n> --colors=<r>
+
+Run DPLL:
+julia run_dpll.jl  (edit the CNF file path directly inside the runner)
