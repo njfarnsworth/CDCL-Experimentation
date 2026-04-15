@@ -1,3 +1,11 @@
+## About
+
+This repository contains a Julia-based implementation of a Conflict-Driven Clause Learning (CDCL) SAT solver, developed in partial fulfillment of COSC 492 (Honors Research in Computer Science) at Colgate University.
+
+The solver is designed as an accessible, introductory platform for understanding CDCL and modern SAT solving techniques. Unlike most production solvers, which are implemented in C/C++, this project leverages Julia for clarity and ease of use, making it more approachable for learning and experimentation.
+
+The codebase is intentionally modular, allowing users to easily modify components and observe the effects of different heuristic choices. Its lightweight and transparent design makes it well-suited for testing new ideas, building custom heuristics, and exploring extensions to standard CDCL methods, as demonstrated in [cite CS thesis].
+
 ## Project Directory
 
 - **CDCL** – Folder containing code for the Conflict-Driven Clause Learning (CDCL) algorithm
@@ -30,12 +38,14 @@
  
 ## Usage
 
-To run the CDCL solver on a CNF instance, use:
+To run the CDCL solver on a Hales--Jewett based CNF instance, use:
 
 `julia run_cdcl.jl <path_to_cnf> --k=<k> --n=<n> --colors=<r>`
 
-where `<path_to_cnf>` is the path to the input file.
+where `<path_to_cnf>` is the path to the input file. For use beyond Hales--Jewett CNFs, remove model analysis from the runner and omit Hales--Jewett flags during execution. 
 
 To run the DPLL solver, use: 
 
 `julia run_dpll.jl`  (edit the CNF file path directly inside the runner)
+
+No additional flags are required for DPLL as model analysis is not integrated into this solver. 
